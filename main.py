@@ -1,0 +1,120 @@
+"""
+main.py -- end-to-end training entrypoint (mirrors NEGSC.ipynb top to bottom).
+
+This file is being built up phase by phase alongside the modules. Right now
+only the "Data Flow" / "Graph Representation" phase (data.py) is wired in.
+Later phases (NEGAT encoder, NEGSC contrastive training, Predict) are marked
+as TODO and will be filled in as negat.py / negsc.py / predict.py land.
+"""
+
+import torch
+
+import data
+
+# ---------------------------------------------------------------------------
+# Config (kept inline per project decision -- no separate config.py)
+# ---------------------------------------------------------------------------
+
+DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+DATA_PATH = "data_raw/NF-BoT-IoT-v2.csv"
+
+# Set to an int (e.g. 200_000) for fast local dev/smoke-testing on a subset
+# of the raw csv. Leave as None to use the full dataset (matches the paper).
+NROWS_LIMIT = 2000000
+
+SAMPLE_FRAC = 0.03
+SAMPLE_RANDOM_STATE = 13
+
+SPLIT_TEST_SIZE = 0.3
+SPLIT_RANDOM_STATE = 123
+
+learning_rate = 0.0001
+num = 20000          # nodes sampled per training epoch (sub_sam batch size)
+k1 = 3                # subgraph size (center + k1-1 neighbors)
+tau = 5                # temperature for WD/GWD contrastive losses
+num_epochs = 300        # epochs per graph chunk in the NEGSC training loop
+weight_decay = 0.00001
+g_len = 35000             # rows per training graph chunk
+num_heads = 3               # attention heads in NEGAT
+
+
+def main():
+    # -----------------------------------------------------------------
+    # Phase 2: Data Flow / Graph Representation  (data.py)
+    # -----------------------------------------------------------------
+    print(f"[data] loading raw csv from {DATA_PATH} "
+          f"(nrows={NROWS_LIMIT or 'all'})...")
+    raw = data.load_raw(DATA_PATH, nrows=NROWS_LIMIT)
+    print(f"[data] loaded {len(raw)} rows")
+
+    raw = data.sample_by_attack(raw, frac=SAMPLE_FRAC,
+                                 random_state=SAMPLE_RANDOM_STATE)
+    print(f"[data] sampled down to {len(raw)} rows "
+          f"(frac={SAMPLE_FRAC} per attack class)")
+
+    raw = data.build_ip_port_ids(raw)
+    print("[data] built ip:port node ids")
+
+    raw, label_encoder = data.encode_labels(raw)
+    print(f"[data] encoded labels: {list(label_encoder.classes_)}")
+
+    X_train, X_test, y_train, y_test = data.split_data(
+        raw, test_size=SPLIT_TEST_SIZE, random_state=SPLIT_RANDOM_STATE
+    )
+    print(f"[data] split: X_train={len(X_train)} rows, X_test={len(X_test)} rows")
+
+    target_encoder = data.fit_target_encoder(X_train, y_train)
+    X_train = data.transform_with_encoder(X_train, target_encoder)
+    print("[data] target-encoded categorical columns")
+
+    X_train, scaler, cols_to_norm = data.fit_scale_and_build_feature_vector(X_train)
+    print("[data] scaled features and built 'h' feature vectors")
+
+    print("[data] building training graphs (this can take a while on large "
+          "chunks)...")
+    graph = data.build_train_graphs(X_train, g_len=g_len, num=num)
+
+    # X_test is encoded/scaled later in the notebook (right before the
+    # downstream classifier stage), kept here for reference:
+    # X_test = data.transform_with_encoder(X_test, target_encoder)
+    # X_test = data.scale_and_build_feature_vector(X_test, scaler, cols_to_norm)
+    # G_test = data.build_test_graph(X_test)
+
+    print(f"[data] built {len(graph)} training graph chunks on {DEVICE}")
+    for i, g in enumerate(graph):
+        print(f"  graph[{i}]: nodes={g.num_nodes()} edges={g.num_edges()} "
+              f"edge_feat_dim={g.edata['h'].shape[1]}")
+
+    # -----------------------------------------------------------------
+    # Phase 3: NEGAT Encoder  (negat.py)                         [TODO]
+    # -----------------------------------------------------------------
+    # n_dim = e_dim = out_dim = graph[0].edata['h'].shape[1]
+    # activation = F.relu
+    # Encoder = GAT(n_dim, e_dim, out_dim, num_heads).to(DEVICE)
+
+    # -----------------------------------------------------------------
+    # Phase 4: NEGSC contrastive training  (negsc.py)            [TODO]
+    # -----------------------------------------------------------------
+    # gene = GAT(n_dim, e_dim, out_dim, num_heads)
+    # model = Model(Encoder, gene, tau=tau).to(DEVICE)
+    # optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,
+    #                               weight_decay=weight_decay)
+    # for g in graph:
+    #     ... sub_sam + train() loop ...
+
+    # -----------------------------------------------------------------
+    # Phase 5: Predict  (predict.py)                              [TODO]
+    # -----------------------------------------------------------------
+    # X_test = data.transform_with_encoder(X_test, target_encoder)
+    # X_test = data.scale_and_build_feature_vector(X_test, scaler, cols_to_norm)
+    # G_test = data.build_test_graph(X_test)
+    # full_train_graph = data.build_full_train_graph(X_train)
+    # ... embed, train downstream classifier, evaluate ...
+
+    # torch.save(model, "checkpoints/model.pth")
+    # torch.save(log, "checkpoints/log.pth")
+
+
+if __name__ == "__main__":
+    main()
