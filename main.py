@@ -8,8 +8,10 @@ as TODO and will be filled in as negat.py / negsc.py / predict.py land.
 """
 
 import torch
+import torch.nn.functional as F
 
 import data
+import negat
 
 # ---------------------------------------------------------------------------
 # Config (kept inline per project decision -- no separate config.py)
@@ -21,7 +23,7 @@ DATA_PATH = "data_raw/NF-BoT-IoT-v2.csv"
 
 # Set to an int (e.g. 200_000) for fast local dev/smoke-testing on a subset
 # of the raw csv. Leave as None to use the full dataset (matches the paper).
-NROWS_LIMIT = 2000000
+NROWS_LIMIT = 2_000_000
 
 SAMPLE_FRAC = 0.03
 SAMPLE_RANDOM_STATE = 13
@@ -87,11 +89,17 @@ def main():
               f"edge_feat_dim={g.edata['h'].shape[1]}")
 
     # -----------------------------------------------------------------
-    # Phase 3: NEGAT Encoder  (negat.py)                         [TODO]
+    # Phase 3: NEGAT Encoder  (negat.py)
     # -----------------------------------------------------------------
-    # n_dim = e_dim = out_dim = graph[0].edata['h'].shape[1]
-    # activation = F.relu
-    # Encoder = GAT(n_dim, e_dim, out_dim, num_heads).to(DEVICE)
+    # Source (NEGSC.ipynb cell 28) reads these dims off the last built
+    # training graph chunk; since all chunks share the same edge feature
+    # width, using graph[0] here is equivalent.
+    n_dim = e_dim = out_dim = graph[0].edata['h'].shape[1]
+    activation = F.relu
+
+    Encoder = negat.GAT(n_dim, e_dim, out_dim, num_heads).to(DEVICE)
+    print(f"[negat] built Encoder (NEGAT GAT) with n_dim={n_dim}, "
+          f"e_dim={e_dim}, num_heads={num_heads}")
 
     # -----------------------------------------------------------------
     # Phase 4: NEGSC contrastive training  (negsc.py)            [TODO]
