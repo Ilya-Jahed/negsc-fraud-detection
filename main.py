@@ -18,6 +18,7 @@ import torch.nn.functional as F
 import data
 import negat
 import negsc
+import predict
 
 # ---------------------------------------------------------------------------
 # Config (kept inline per project decision -- no separate config.py)
@@ -29,7 +30,7 @@ DATA_PATH = "data_raw/NF-BoT-IoT-v2.csv"
 
 # Set to an int (e.g. 200_000) for fast local dev/smoke-testing on a subset
 # of the raw csv. Leave as None to use the full dataset (matches the paper).
-NROWS_LIMIT = 2_000_000
+NROWS_LIMIT = None
 
 SAMPLE_FRAC = 0.03
 SAMPLE_RANDOM_STATE = 13
@@ -170,16 +171,45 @@ def main():
                 torch.cuda.empty_cache()
 
     # -----------------------------------------------------------------
-    # Phase 5: Predict  (predict.py)                              [TODO]
+    # Phase 5: Predict  (predict.py)
     # -----------------------------------------------------------------
-    # X_test = data.transform_with_encoder(X_test, target_encoder)
-    # X_test = data.scale_and_build_feature_vector(X_test, scaler, cols_to_norm)
-    # G_test = data.build_test_graph(X_test)
-    # full_train_graph = data.build_full_train_graph(X_train)
-    # ... embed, train downstream classifier, evaluate ...
+    print("[predict] preparing test graph and full training graph...")
+    X_test = data.transform_with_encoder(X_test, target_encoder)
+    X_test = data.scale_and_build_feature_vector(X_test, scaler, cols_to_norm)
+    G_test = data.build_test_graph(X_test)
+    G_test = G_test.to(DEVICE)
 
-    # torch.save(model, "checkpoints/model.pth")
-    # torch.save(log, "checkpoints/log.pth")
+    # Source rebuilds a fresh, unchunked graph over the entire X_train here
+    # (NEGSC.ipynb cells 38-41) -- this is a different graph object from
+    # any of the per-chunk training graphs used in Phase 4.
+    full_train_graph = data.build_full_train_graph(X_train)
+    full_train_graph = full_train_graph.to(DEVICE)
+
+    print("[predict] embedding train/test graphs with trained NEGSC encoder...")
+    train_embs, test_embs, train_lbls, test_lbls = predict.embed_graphs(
+        model, full_train_graph, G_test
+    )
+
+    n_classes = len(label_encoder.classes_)
+    print(f"[predict] training downstream classifier for {n_classes} classes "
+          f"(10000 steps, this will take a while)...")
+    log = predict.train_classifier(
+        train_embs, train_lbls, in_features=n_dim, n_classes=n_classes,
+        g_for_predictor=full_train_graph, num_steps=10000
+    )
+
+    preds = predict.predict(log, G_test, test_embs)
+    test_lbls_decoded, preds_decoded = predict.decode_labels(
+        label_encoder, test_lbls, preds
+    )
+
+    print("[predict] evaluation:")
+    predict.evaluate(test_lbls_decoded, preds_decoded,
+                      save_path="outputs/confusion_matrix.png")
+
+    torch.save(model, "checkpoints/model.pth")
+    torch.save(log, "checkpoints/log.pth")
+    print("[predict] saved checkpoints/model.pth and checkpoints/log.pth")
 
 
 if __name__ == "__main__":
