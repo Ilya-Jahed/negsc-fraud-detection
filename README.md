@@ -5,6 +5,25 @@ combined with graph-contrastive self-supervised learning (Wasserstein
 distance + Gromov-Wasserstein distance losses) for **network intrusion
 detection** on NetFlow data (NF-BoT-IoT-v2).
 
+> **Paper:** Xu, R., Wu, G., Wang, W., Gao, X., He, A., Zhang, Z. (2024).
+> *Applying self-supervised learning to network intrusion detection for
+> network flows with graph neural network.* Computer Networks 248, 110495.
+> Authors' code: https://github.com/renj-xu/NEGSC
+
+**What problem this solves:** GNN-based NIDS usually need labeled traffic
+to train on, which is expensive and can't keep up with new attack types.
+Prior self-supervised GNN-based NIDS (e.g. Anomal-E) only manage *binary*
+classification ("malicious or not") because their contrastive objective
+doesn't carry enough signal to separate attack *types*. NEGSC is presented
+as the first GNN-based self-supervised method to do full **multiclass**
+classification of network flows (Benign / DDoS / DoS / Reconnaissance /
+Theft), via two changes to a general graph-contrastive framework (GSC):
+an edge-aware encoder (**NEGAT**, since in NetFlow data the informative
+signal — protocol, flags, byte/packet counts — lives on edges/flows, not
+on nodes/IP:port endpoints), and a new contrastive objective (**NEGSC**)
+comparing subgraphs via both edge-feature distance (Wasserstein Distance)
+and topology distance (Gromov-Wasserstein Distance).
+
 This repo mirrors the paper's original notebooks (`NEGSC.ipynb` for
 training, `test.ipynb` for inference) one-to-one in logic, split into
 readable modules that map directly onto the panels of the architecture
@@ -21,12 +40,15 @@ diagram:
 
 ## Status
 
+All modules implemented, end to end (both `NEGSC.ipynb` and `test.ipynb`
+are fully ported):
+
 - [x] `data.py` — data loading, preprocessing, encoding, DGL graph construction
-- [x] `main.py` — wired up through the data phase only (rest marked `TODO`)
-- [ ] `negat.py`
-- [ ] `negsc.py`
-- [ ] `predict.py`
-- [ ] `run_inference.py`
+- [x] `negat.py` — NEGAT encoder (GATlayer, MultiHeadGATLayer, GAT)
+- [x] `negsc.py` — subgraph sampling, NEGSC contrastive model (WD/GWD loss), train()
+- [x] `predict.py` — embedding, downstream classifier, metrics, confusion matrix
+- [x] `main.py` — full end-to-end training pipeline (= `NEGSC.ipynb`)
+- [x] `run_inference.py` — inference on a saved checkpoint (= `test.ipynb`)
 
 ## Setup
 
@@ -79,28 +101,57 @@ Download `NF-BoT-IoT-v2.csv` and place it at:
 data_raw/NF-BoT-IoT-v2.csv
 ```
 
-## Running (current progress)
+## Running
 
-Only the data pipeline is wired in so far. Running `main.py` at this point
-loads the raw csv, preprocesses it, and builds the training graph chunks,
-printing a summary of each graph:
+### Training (= `NEGSC.ipynb`)
 
 ```bash
 python main.py
 ```
 
-Expected output looks like:
+This runs the full pipeline: preprocesses the data, builds training
+graphs, pre-trains the NEGAT/NEGSC contrastive encoder, then trains a
+downstream MLP classifier on the frozen embeddings, evaluates it
+(classification report + confusion matrix saved to
+`outputs/confusion_matrix.png`), and saves checkpoints to
+`checkpoints/model.pth` and `checkpoints/log.pth`.
 
-```
-[data] built <N> training graph chunks on cpu
-  graph[0]: nodes=... edges=... edge_feat_dim=...
-  graph[1]: nodes=... edges=... edge_feat_dim=...
-  ...
+Expect a lot of console output — the contrastive loss debug logging and
+the 10,000-step downstream classifier loop are both verbose, matching the
+source notebook's behavior.
+
+### Inference on a saved checkpoint (= `test.ipynb`)
+
+```bash
+python run_inference.py
 ```
 
-The remaining pipeline (NEGAT encoder, NEGSC contrastive training, and the
-downstream Predict stage) is stubbed out with `TODO` comments in `main.py`
-and will be filled in as `negat.py`, `negsc.py`, and `predict.py` are added.
+Requires `checkpoints/model.pth` and `checkpoints/log.pth` to already
+exist (produced by `python main.py`). This script re-runs preprocessing
+(without downsampling — `test.ipynb` uses the raw csv as-is, unlike
+`main.py`'s 3%-per-class sample) and re-derives the target encoder and
+scaler fresh on the resulting `X_train`, then loads the checkpoints,
+embeds the test graph, predicts, and reports metrics + a confusion matrix
+saved to `outputs/confusion_matrix_inference.png`. See the "Known
+discrepancies" section below for why the encoder/scaler are re-derived
+rather than loaded from the training run.
+
+## Known discrepancies vs. the paper
+
+This project's goal so far has been to reproduce the reference notebooks
+**exactly**, bugs included, before any refactor. Close reading turned up
+several places where the *code* quietly diverges from what the *paper*
+describes or implies. None of these have been "fixed" — each is
+replicated faithfully and flagged in-code where it occurs:
+
+| # | Location | What the paper implies | What the code actually does |
+|---|---|---|---|
+| 1 | `main.py`, model/optimizer construction | Train with `tau=5`, `lr=1e-4`, `weight_decay=1e-5` (defined as config constants) | `negsc.Model(Encoder, gene)` and `torch.optim.Adam(model.parameters())` are called **without** passing these in, so they silently fall back to library defaults (`tau≈0.5`, `lr=1e-3`, `weight_decay=0`). The configured values are dead. |
+| 2 | `predict.py`, `embed_graphs` | Node features read from a consistent key | Training graphs store node features under `ndata['h']`; the test graph uses `ndata['feature']` instead — a naming inconsistency inherited from the source notebook, handled with a special case rather than a fix. |
+| 3 | `predict.py`, `train_classifier` | — | `loss.backward(retain_graph=True)` is called even though nothing downstream needs the graph kept alive (inputs are already `.detach()`-ed). Likely an unnecessary carry-over that costs extra memory for no benefit. |
+| 4 | `negat.py`, `GAT.__init__` | Hidden/output width should follow the `out_dim` argument | `MultiHeadGATLayer(in_dim, e_dim, 39, num_heads)` hardcodes the output width to `39` regardless of `out_dim`. Harmless here only because this dataset always has 39 edge features anyway. |
+| 5 | `negsc.py`, `Model.sub_loss_batch` | `L = L_edges + L_topology` (two terms) | A third term (node-level WD loss) is computed and logged but never added into the returned loss — this actually **matches** the paper's two-term formula; the extra computation looks like dead code inherited from the base GSC method, costing time for nothing. |
+| 6 | `negsc.py`, `Model._edge_features` | The edge embedder should be a trained part of the model | The edge-embedding `MLPPredictor` is instantiated fresh with random weights on **every training step**, never registered with the optimizer, and discarded after use. One of the two loss terms that drives training is therefore computed on a permanently-untrained random projection — confirmed intentional in the source. |
 
 ## Reference
 
