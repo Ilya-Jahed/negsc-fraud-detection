@@ -7,11 +7,17 @@ Later phases (NEGAT encoder, NEGSC contrastive training, Predict) are marked
 as TODO and will be filled in as negat.py / negsc.py / predict.py land.
 """
 
+import gc
+from collections import defaultdict
+
+import numpy as np
+import scipy.sparse as sp
 import torch
 import torch.nn.functional as F
 
 import data
 import negat
+import negsc
 
 # ---------------------------------------------------------------------------
 # Config (kept inline per project decision -- no separate config.py)
@@ -102,14 +108,66 @@ def main():
           f"e_dim={e_dim}, num_heads={num_heads}")
 
     # -----------------------------------------------------------------
-    # Phase 4: NEGSC contrastive training  (negsc.py)            [TODO]
+    # Phase 4: NEGSC contrastive training  (negsc.py)
     # -----------------------------------------------------------------
-    # gene = GAT(n_dim, e_dim, out_dim, num_heads)
-    # model = Model(Encoder, gene, tau=tau).to(DEVICE)
-    # optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,
-    #                               weight_decay=weight_decay)
-    # for g in graph:
-    #     ... sub_sam + train() loop ...
+    gene = negat.GAT(n_dim, e_dim, out_dim, num_heads)
+
+    # !!! FIDELITY WARNING !!!
+    # The source notebook (NEGSC.ipynb cell 29) constructs Model and the
+    # optimizer WITHOUT passing tau, lr, or weight_decay, even though those
+    # are defined above (tau=5, learning_rate=0.0001, weight_decay=0.00001).
+    # This means the source actually trains with Model's default tau=0.5
+    # and Adam's default lr=0.001 / weight_decay=0 -- the config values
+    # above are effectively DEAD in the original code. This is very likely
+    # an oversight in the source, but per project decision we replicate it
+    # exactly rather than silently "fixing" it. If you want the config
+    # values to actually take effect, change the two lines below to:
+    #   model = negsc.Model(Encoder, gene, tau=tau).to(DEVICE)
+    #   optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,
+    #                                 weight_decay=weight_decay)
+    model = negsc.Model(Encoder, gene).to(DEVICE)
+    optimizer = torch.optim.Adam(model.parameters())
+    print(f"[negsc] built Model (tau={model.tau}) and optimizer "
+          f"(lr={optimizer.defaults['lr']}, "
+          f"weight_decay={optimizer.defaults['weight_decay']}) "
+          f"-- NOTE: these ignore the tau/learning_rate/weight_decay "
+          f"config values above, matching the source notebook exactly.")
+
+    # Source cell 30 also defines node_neighbor={}, best=1e9, best_t=0,
+    # bestacc=0 here -- none of these are referenced anywhere in the
+    # visible training loop, so they are vestigial/unused and omitted.
+
+    for gi, g in enumerate(graph):
+        print(f"[negsc] training on graph {gi + 1}/{len(graph)} "
+              f"(nodes={g.num_nodes()}, edges={g.num_edges()})...")
+
+        g.ndata['h'] = torch.ones(g.num_nodes(), g.edata['h'].shape[1])
+        adj = sp.coo_matrix(
+            (np.ones(g.num_edges()), (g.edges()[0], g.edges()[1])),
+            shape=(g.num_nodes(), g.num_nodes()), dtype=np.float32
+        ).toarray()
+        adj = torch.from_numpy(adj).to(DEVICE)
+        adj_lists = defaultdict(set)
+        g1 = g
+        for x in range(g1.num_edges()):
+            adj_lists[g1.edges()[0][x].item()].add(g1.edges()[1][x].item())
+        g = g.to(DEVICE)
+        node_feats = g.ndata['h']
+        edge_feats = g.edata['h']
+
+        for epoch in range(1, num_epochs + 1):
+            nodes_batch = torch.randint(0, g.num_nodes(), (num,))
+            node_neighbor_cen = negsc.sub_sam(nodes_batch, adj_lists, k1)
+            loss = negsc.train(model, g, node_feats, edge_feats, adj,
+                                node_neighbor_cen, optimizer)
+
+        print(f"[negsc] graph {gi + 1}/{len(graph)} done, final loss={loss:.4f}")
+
+        del adj, g
+        gc.collect()
+        if DEVICE.type == "cuda":
+            for _ in range(5):
+                torch.cuda.empty_cache()
 
     # -----------------------------------------------------------------
     # Phase 5: Predict  (predict.py)                              [TODO]
