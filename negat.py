@@ -23,28 +23,43 @@ class GATlayer(nn.Module):
         self.e_feat = e_feat
         self.out_feat = out_feat
         self.num_heads = num_heads
+        # Projects [src_node || dst_node || edge] -> out_feat.
+        # Produces the *message content* sent along each edge (used in message_func).
         self.W_msg = nn.Linear(2 * n_feat + e_feat, out_feat)
+        # Projects [src_node || dst_node || edge] -> 2*out_feat.
+        # Feeds into the attention score computation (edge_attention), not the
+        # message content itself -- a separate learned projection from W_msg.
         self.W = nn.Linear(2 * n_feat + e_feat, 2 * out_feat)
+        # Attention vector: dotted with the W-projected edge features to produce
+        # a single unnormalized attention logit per edge (standard GAT-style
+        # attention, Velickovic et al.), extended here to include edge features.
         self.a = nn.Parameter(torch.rand(size=(2 * out_feat, 1)))
         self.reset_parameters()
 
     def reset_parameters(self):
+        # Xavier init; gain=sqrt(2) is the recommended gain for ReLU/LeakyReLU.
         gain = math.sqrt(2)
         init.xavier_normal_(self.W.weight, gain=gain)
         init.xavier_normal_(self.a, gain=gain)
 
     def edge_attention(self, edges):
+        # Raw (unnormalized) attention logit e_uv for edge (u -> v):
+        # concat [src, dst, edge] -> project with W -> dot with a -> LeakyReLU.
         feat_cat = torch.cat([edges.src['h'], edges.dst['h'], edges.data['h']], dim=1)
         w_feat_cat = self.W(feat_cat)
         return {'e': F.leaky_relu(torch.matmul(w_feat_cat, self.a))}
 
     def message_func(self, edges):
+        # Per-edge message content ('h', via W_msg) and its already-normalized
+        # attention weight ('x', filled in by edge_softmax in forward()).
         return {
             'h': self.W_msg(torch.cat([edges.src['h'], edges.dst['h'], edges.data['h']], dim=1)),
             'x': edges.data['x'],
         }
 
     def reduce_func(self, nodes):
+        # Attention-weighted sum of incoming messages: for each destination
+        # node, sum (attention_weight * message) over all incoming edges.
         h = (nodes.mailbox['x'] * nodes.mailbox['h']).sum(1)
         return {'h': h}
 
@@ -52,10 +67,10 @@ class GATlayer(nn.Module):
         with g.local_scope():
             g.ndata['h'] = n_feat
             g.edata['h'] = e_feat
-            g.apply_edges(self.edge_attention)
-            attention = edge_softmax(g, g.edata['e'])
+            g.apply_edges(self.edge_attention)          # compute raw 'e' per edge
+            attention = edge_softmax(g, g.edata['e'])     # normalize per destination node
             g.edata['x'] = attention
-            g.update_all(self.message_func, self.reduce_func)
+            g.update_all(self.message_func, self.reduce_func)  # weighted aggregation
             g.ndata['h'] = F.relu(g.ndata['h'])
             feat = g.ndata['h']
             return feat
