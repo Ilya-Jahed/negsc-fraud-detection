@@ -153,14 +153,25 @@ def plot_confusion_matrix(cm, target_names, title='Confusion matrix',
     plt.xlabel('Predicted label\naccuracy={:0.4f}; misclass={:0.4f}'.format(accuracy, misclass))
     if save_path:
         plt.savefig(save_path)
-    plt.show()
+        plt.close()
+    else:
+        plt.show()
 
 
 def evaluate(test_lbls, preds, save_path='outputs/confusion_matrix.png'):
     """
     Convenience wrapper: print classification_report and plot+save the
     confusion matrix, mirroring NEGSC.ipynb cells 50/52.
+
+    Returns a metrics dict. `macro_f1` is included alongside the weighted
+    figures because the weighted average is dominated by DDoS/DoS and hides
+    exactly the minority-class collapse this dataset is prone to (Theft has
+    73 samples in the paper's 3% sample). See the benchmark protocol,
+    ROADMAP Phase 7.
     """
+    from sklearn.metrics import (accuracy_score, f1_score,
+                                 precision_score, recall_score)
+
     target_names = np.unique(test_lbls)
     plot_confusion_matrix(
         cm=confusion_matrix(test_lbls, preds),
@@ -170,3 +181,22 @@ def evaluate(test_lbls, preds, save_path='outputs/confusion_matrix.png'):
         save_path=save_path,
     )
     print_classification_report(test_lbls, preds, target_names)
+
+    metrics = dict(
+        accuracy=float(accuracy_score(test_lbls, preds)),
+        weighted_precision=float(precision_score(test_lbls, preds, average="weighted", zero_division=0)),
+        weighted_recall=float(recall_score(test_lbls, preds, average="weighted", zero_division=0)),
+        weighted_f1=float(f1_score(test_lbls, preds, average="weighted", zero_division=0)),
+        macro_precision=float(precision_score(test_lbls, preds, average="macro", zero_division=0)),
+        macro_recall=float(recall_score(test_lbls, preds, average="macro", zero_division=0)),
+        macro_f1=float(f1_score(test_lbls, preds, average="macro", zero_division=0)),
+    )
+    metrics["per_class"] = {
+        str(cls): dict(
+            recall=float(recall_score(test_lbls, preds, labels=[cls], average="macro", zero_division=0)),
+            f1=float(f1_score(test_lbls, preds, labels=[cls], average="macro", zero_division=0)),
+            support=int(np.sum(np.asarray(test_lbls) == cls)),
+        )
+        for cls in target_names
+    }
+    return metrics

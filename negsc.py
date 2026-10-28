@@ -92,9 +92,14 @@ def sub_sam(nodes, adj_lists: dict, k: int) -> list:
         subgraph_nodes = adj_lists[node_id]  # fallback if node has too few neighbors
 
         if len(neighbor_set) >= k:
-            # Remove the center itself, sample k-1 random neighbors
+            # Remove the center itself, sample k-1 random neighbors.
+            # `sorted()` is required: `random.sample` refuses a set on
+            # Python >= 3.11 ("Population must be a sequence"). The source
+            # notebook passed the set directly, which only worked because the
+            # authors ran 3.10. Sorting fixes the population order; which
+            # k-1 of them are drawn is still driven by the seeded RNG.
             eligible_neighbors = neighbor_set - {node_id}
-            subgraph_nodes = random.sample(eligible_neighbors, k - 1)
+            subgraph_nodes = random.sample(sorted(eligible_neighbors), k - 1)
 
             # Write neighbors-only first (matches notebook structure)
             subgraphs[subgraph_count] = list(subgraph_nodes)
@@ -278,6 +283,16 @@ class Model(nn.Module):
     # ------------------------------------------------------------------
 
     def _subgraph_adj(self, adj, subgraphs) -> torch.Tensor:
+        """Per-subgraph k x k adjacency blocks.
+
+        `adj` is either a `sparse_adj.SparseAdjacency` (the O(E) path, ROADMAP
+        Phase 1 -- sparse adjacency) or a dense [N, N] tensor (the reference's path, kept so that
+        variant A and the parity gate can run the original expression).
+        Both produce identical blocks -- see tests/test_sparse_adj.py.
+        """
+        if hasattr(adj, "batch"):
+            return adj.batch(subgraphs)
+
         subgraph_size = len(subgraphs[0])
         subgraph_adj = torch.zeros(len(subgraphs), subgraph_size, subgraph_size)
         for i, node_ids in enumerate(subgraphs):

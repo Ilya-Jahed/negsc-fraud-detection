@@ -1,0 +1,44 @@
+{
+  "created": "2026-10-28T13:51:48",
+  "source": {
+    "path": "data_raw/NF-BoT-IoT-v2.csv",
+    "rows": 37763497,
+    "sha256": "a94465c84ee393609db43464bc48bf84d01d1a68d1fe5b858071bf935d2e7a1b"
+  },
+  "output": {
+    "path": "data_raw/sample_3pct.csv",
+    "rows": 1131139,
+    "bytes": 181152503,
+    "sha256": "e2157235acae8f34f35c7f81391dd143bf1fddeacb16c3c641eec2b9950ff0a9"
+  },
+  "procedure": {
+    "method": "streamed per-row inclusion, probability = frac",
+    "frac": 0.03,
+    "seed": 13,
+    "chunk_rows": 100000,
+    "equivalent_to_source": false,
+    "note": "Statistically equivalent to groupby('Attack').sample(frac=frac, random_state=13) but not the same rows. All runs must consume this file."
+  },
+  "class_counts_full": {
+    "DDoS": 18331847,
+    "DoS": 16673183,
+    "Reconnaissance": 2620999,
+    "Benign": 135037,
+    "Theft": 2431
+  },
+  "class_counts_sampled": {
+    "DDoS": 548229,
+    "DoS": 500164,
+    "Reconnaissance": 78621,
+    "Benign": 4047,
+    "Theft": 78
+  },
+  "paper_table5_reference": {
+    "Benign": 4051,
+    "DoS": 500195,
+    "DDoS": 549955,
+    "Reconnaissance": 78630,
+    "Theft": 73
+  },
+  "elapsed_sec": 384.4
+}

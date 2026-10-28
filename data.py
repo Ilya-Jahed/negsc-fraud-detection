@@ -31,6 +31,25 @@ def load_raw(path: str, nrows: int = None) -> pd.DataFrame:
     `nrows`, if given, reads only the first N rows -- useful for fast local
     dev/smoke-testing on a huge file. Leave as None for the full dataset
     (matches the source notebook exactly).
+
+    NOTE: the full file is 6.05 GB / 37,763,496 rows and does not fit in
+    16.9 GB of RAM alongside pandas' working copy. Use `load_cache()` on the
+    pre-sampled file for anything larger than a smoke test (ROADMAP, Phase 1 -- dataset cache).
+    """
+    return pd.read_csv(path, nrows=nrows)
+
+
+def load_cache(path: str, nrows: int = None) -> pd.DataFrame:
+    """
+    Load the pre-sampled cache produced by `make_cache.py`.
+
+    The cache is a plain CSV, identical in schema to the raw file. It exists
+    because the raw file cannot be read on this machine, and because every run
+    -- reference notebook included -- must consume byte-identical input for
+    the parity gate (ROADMAP, Phase 2) to mean anything.
+
+    Returns the frame with the `Attack`/`Label` columns intact; sampling has
+    already happened upstream.
     """
     return pd.read_csv(path, nrows=nrows)
 
@@ -116,18 +135,44 @@ def transform_with_encoder(X: pd.DataFrame, encoder: ce.TargetEncoder) -> pd.Dat
     return encoder.transform(X)
 
 
-def fit_scale_and_build_feature_vector(X_train: pd.DataFrame):
+def feature_columns(X_train: pd.DataFrame, legacy_order: bool = False) -> list:
+    """
+    The ordered list of columns that become the edge feature vector 'h'.
+
+    ROADMAP, Phase 1 -- feature-column order; blocker B5. The source does:
+
+        list(set(list(X_train.iloc[:, 2:].columns)) - set(['label']))
+
+    A `set` of strings iterates in an order derived from their hashes, which
+    CPython randomises per process unless PYTHONHASHSEED is fixed. The column
+    order is *not* cosmetic: each feature dimension gets its own weight in the
+    encoder, so a different order is a different model. Measured on the
+    authors' own checkpoint, the same weights score between 0.44 and 0.90
+    accuracy depending only on this order (see the evidence table in the roadmap appendix).
+
+    Default: CSV column order after the two IP:port id columns -- the same set
+    of columns, deterministically ordered.
+
+    `legacy_order=True` reproduces the source expression exactly, for the
+    parity gate and for variant A.
+    """
+    if legacy_order:
+        return list(set(list(X_train.iloc[:, 2:].columns)) - set(['label']))
+    return [c for c in X_train.columns[2:] if c != 'label']
+
+
+def fit_scale_and_build_feature_vector(X_train: pd.DataFrame,
+                                       legacy_order: bool = False):
     """
     Fit a StandardScaler on all feature columns (excluding the first two
     IP:port id columns and 'label'), then build the 'h' feature-vector
     column. Mirrors NEGSC.ipynb cell 11.
 
-    Returns (X_train, scaler, cols_to_norm).
+    Returns (X_train, scaler, cols_to_norm). `cols_to_norm` is part of the
+    model: persist it with the checkpoint and reuse it at inference.
     """
     X_train = X_train.copy()
-    cols_to_norm = list(
-        set(list(X_train.iloc[:, 2:].columns)) - set(['label'])
-    )
+    cols_to_norm = feature_columns(X_train, legacy_order=legacy_order)
     scaler = StandardScaler()
     X_train[cols_to_norm] = scaler.fit_transform(X_train[cols_to_norm])
     X_train['h'] = X_train[cols_to_norm].values.tolist()
@@ -151,14 +196,27 @@ def scale_and_build_feature_vector(X: pd.DataFrame, scaler: StandardScaler,
 # Graph construction (NEGSC.ipynb cells 22, 38; test.ipynb cell 17)
 # ---------------------------------------------------------------------------
 
-def build_train_graphs(X_train: pd.DataFrame, g_len: int, num: int):
+def build_train_graphs(X_train: pd.DataFrame, g_len: int, num: int,
+                       max_chunks: int = None, min_nodes: int = None):
     """
     Split X_train into chunks of g_len rows, build a directed multigraph
     per chunk with edge attrs ['h', 'label'], convert to DGL. Drop the last
     graph if it has fewer than `num` nodes. Mirrors NEGSC.ipynb cells
     13/22/26.
+
+    `max_chunks` limits how many chunks are built, for the parity gate and
+    smoke runs. The reference builds all of them; leave it None for that.
+
+    Note the chunking is positional (`X_train[i*g_len:(i+1)*g_len]`) on a
+    frame whose index was shuffled by train_test_split. That is the source
+    behaviour and is kept: it means the chunks are not contiguous row ranges
+    of the original file, but arbitrary samples. It does not affect
+    correctness -- each chunk is still a valid graph -- only the composition
+    of each chunk.
     """
     g_num = math.ceil(len(X_train) / g_len)
+    if max_chunks is not None:
+        g_num = min(g_num, max_chunks)
     graph = []
     for i in range(g_num):
         chunk = X_train[i * g_len: (i + 1) * g_len]
@@ -170,7 +228,8 @@ def build_train_graphs(X_train: pd.DataFrame, g_len: int, num: int):
         G = from_networkx(G, edge_attrs=['h', 'label'])
         graph.append(G)
 
-    if graph[-1].num_nodes() < num:
+    threshold = num if min_nodes is None else min_nodes
+    if graph and graph[-1].num_nodes() < threshold:
         graph = graph[:-1]
     return graph
 
