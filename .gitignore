@@ -1,6 +1,63 @@
+# NEGSC baseline -- what is generated, and why it is not tracked.
+#
+# Rule of thumb: anything that can be rebuilt from a tracked file plus the
+# recorded environment is ignored. Anything needed to *explain* a number is
+# tracked, however large the temptation to ignore it.
+
+# --- Python ---------------------------------------------------------------
 __pycache__/
 *.pyc
-*.pth
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# --- Environments ---------------------------------------------------------
+# Conda envs live outside the repo (~/.conda/envs), so this only guards
+# against someone creating a local venv by mistake.
+.venv/
+venv/
+env/
+
+# --- Data -----------------------------------------------------------------
+# The 6.05 GB raw file and the 181 MB 3% cache are both rebuildable with
+# make_cache.py. data_raw/cache_manifest.json IS tracked: it records the
+# sha256, row and per-class counts, so any result can be tied back to the
+# exact input that produced it.
 *.csv
+!data_raw/.gitkeep
+
+# --- Model artifacts ------------------------------------------------------
+# Weights are output, not source. A run is described by its manifest
+# (outputs/run_*.json) and reproduced from a seed, not by shipping binaries.
+*.pth
+*.pt
+*.ckpt
+checkpoints/*
+!checkpoints/.gitkeep
+
+# --- Run output -----------------------------------------------------------
+# Metrics, loss curves, confusion matrices and manifests for every run.
+# Kept locally as the audit trail; regenerated per run.
 outputs/
+runs/
+
+# --- Notebooks ------------------------------------------------------------
 .ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# --- Docs and records: tracked on purpose --------------------------------
+# These are the project's memory -- decisions, environment and the paper
+# comparison. Never ignore them; the negations below make that explicit even
+# if a broader pattern is added later.
+!README.md
+!ROADMAP.md
+!ENV.md
+!DECISIONS.md
+!DEVIATIONS.md
+!RESULTS.md
+!LIMITATIONS.md
+!reference/REPAIR_DIFF.md
