@@ -25,7 +25,9 @@ import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
-DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+from device import get_device
+
+DEVICE = get_device()
 
 # Defined at module level to match the original notebook scope (cell 20).
 # Used inside Model.sub_loss_batch.

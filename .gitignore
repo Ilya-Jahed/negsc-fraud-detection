@@ -45,6 +45,11 @@ checkpoints/*
 outputs/
 runs/
 
+# --- Logs -----------------------------------------------------------------
+# Build and test logs are evidence for one session, not the record. The
+# decisions they justify live in ENV.md and ROADMAP.md.
+*.log
+
 # --- Notebooks ------------------------------------------------------------
 .ipynb_checkpoints/
 *.nbconvert.ipynb

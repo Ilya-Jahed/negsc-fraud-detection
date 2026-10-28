@@ -43,10 +43,11 @@ import data
 import negat
 import negsc
 import predict
+from device import describe as describe_device, get_device
 from seed import describe, set_seed, warn_if_unpinned
 from sparse_adj import SparseAdjacency
 
-DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+DEVICE = get_device()
 
 # Reference defaults (NEGSC.ipynb cells 9, 12, 19, 29). Kept at the top so a
 # run manifest can record what was actually used.
@@ -301,7 +302,8 @@ def main(argv=None):
         ),
         feature_columns=cols_to_norm,
         classes=list(label_encoder.classes_),
-        env=dict(python=platform.python_version(), **describe()),
+        env=dict(python=platform.python_version(), **describe(),
+                 **describe_device()),
         chunks=[dict(nodes=g.num_nodes(), edges=g.num_edges()) for g in graph],
         metrics=metrics,
         elapsed_sec=elapsed,

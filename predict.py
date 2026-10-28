@@ -19,7 +19,9 @@ from sklearn.metrics import classification_report, confusion_matrix
 import negsc
 from negsc import MLPPredictor
 
-DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+from device import get_device
+
+DEVICE = get_device()
 
 
 # ---------------------------------------------------------------------------
