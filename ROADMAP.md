@@ -67,7 +67,7 @@ as-is.
 | ID | Decision | Your call | Consequence |
 |---|---|---|---|
 | **D1** | Which version ships? | **Both.** The untouched port is kept as `variant-A` and proves fidelity. The repaired, paper-faithful version (`variant-B`) is the one that goes into the app, **and it is the object of this project's main work** | v4 puts B first; A becomes the Phase 2 gate |
-| **D4** | Compute | Lab GPU available | CUDA build; full training ~3–5 h/run instead of ~3.5 days |
+| **D4** | Compute | Lab GPU available | CUDA build installed in `negsc-ref` (torch 2.3.0+cu121, GPU visible). ⚠ **DGL publishes no Windows CUDA wheels**, so on native Windows this still runs on CPU. GPU runs need WSL2/Linux — see `ENV.md`. CPU cost is hours, not days, because of V13 |
 | **D8** | App profile | Offline research harness: CSV in, artifacts out. No enforcement, no streaming, no latency budget, CPU at runtime, no export path | Integration contract in §13, not a serving contract |
 | **D9** | Phase order | Paper fidelity first, app last | Applied in §4–§13 |
 
@@ -89,7 +89,7 @@ as-is.
 
 | Item | Value | Consequence |
 |---|---|---|
-| GPU | RTX 3050 Laptop, **6 GB VRAM** | model fits; dense adjacency does not |
+| GPU | RTX 3050 Laptop, **6 GB VRAM** | model fits; dense adjacency does not. ⚠ **DGL ships no Windows CUDA wheels**, so the GPU is unusable from native Windows — see `ENV.md`. GPU runs need WSL2/Linux |
 | torch | `2.3.0+cpu` | CUDA build not installed |
 | dgl | 2.2.1 | behaviour matches on every op exercised |
 | Python | 3.12.3 | breaks `random.sample(set)` |
