@@ -1,0 +1,9 @@
+# Line endings.
+#
+# Shell scripts must keep LF. They are executed by bash under WSL/Linux, and a
+# CRLF ending makes bash fail with:  $'': command not found
+# `eol=lf` overrides core.autocrlf=true, which Windows checkouts otherwise use.
+*.sh      text eol=lf
+
+# Everything else normalises to LF in the repository.
+*         text=auto

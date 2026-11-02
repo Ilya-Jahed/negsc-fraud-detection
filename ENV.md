@@ -81,6 +81,48 @@ Practical consequence: the parity gate and even the full 32-chunk run are CPU
 work here. At ~50 subgraphs per epoch a step is 1–3 s, so a full training run is
 hours, not days — the Windows limitation costs less than it sounds.
 
+### `negsc` — WSL2 Ubuntu 24.04, Python 3.10, CUDA  (GPU env, working 2026-10-28)
+
+This is the environment that can actually train on the GPU. It lives in the
+Linux filesystem at `~/.venvs/negsc` (not under `/mnt/d`, which is a Windows
+mount and slow for imports); the code stays on `/mnt/d` so Windows and WSL
+share one working tree and one git history.
+
+| Item | Value |
+|---|---|
+| Python | 3.10.22 (via `uv`) |
+| torch | 2.3.0+cu121 — `cuda.is_available()` **True** |
+| dgl | **2.2.0+cu121** |
+| torchdata | **0.8.0** |
+| GPU | RTX 3050 Laptop 6 GB, passed through to WSL |
+
+Verified end to end:
+
+```
+torch CUDA: True
+DGL GPU graph: cuda:0
+```
+
+Set up with `bash setup_wsl.sh`; activate with `source ~/.venvs/negsc/bin/activate`.
+
+#### Three problems this environment hit, and their fixes
+
+All three are recorded in the script so a rebuild cannot regress them.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `OSError: libnvrtc.so.12: cannot open shared object file` → `ImportError: Cannot load Graphbolt C++ library` | DGL's CUDA library dlopens libnvrtc, which lives in `site-packages/nvidia/*/lib` — not on the loader's search path | append the nvidia `lib` dirs to `LD_LIBRARY_PATH` from the venv's `activate` script |
+| `ImportError: cannot import name 'DILL_AVAILABLE' from torch.utils.data.datapipes.utils.common` | torchdata 0.7.1 expects a symbol torch 2.3 removed | `torchdata==0.8.0` |
+| `bash: $'': command not found` when running a `.sh` | Windows checkout gave the script CRLF endings | `.gitattributes` forces `*.sh` to LF |
+
+⚠ **Do not copy the torchdata pin across platforms.** On the Windows CPU env,
+torchdata 0.7.1 with torch 2.3.0+cpu imports fine; on Linux it does not. Same
+versions, different result — an unexplained platform difference, so each env
+keeps its own verified pin.
+
+⚠ **`pip` does not exist in this venv** (it was created by `uv`). Use
+`uv pip install ...`, never `python -m pip`.
+
 ### `negsc-dev` — Python 3.12, CPU  (delivery env)
 
 The environment used for all Phase 1 work. Same packages, `torch 2.3.0+cpu`.
@@ -97,11 +139,12 @@ removed during Phase 1. Consequence: **the dataset cache is CSV, not parquet**
 
 | Capability | Status | Evidence |
 |---|---|---|
-| End-to-end pipeline on synthetic data | ☑ | `pytest tests/ -q` → **12 passed in `negsc-ref` (py3.10) and 12 passed in `negsc-dev` (py3.12)** |
+| End-to-end pipeline on synthetic data | ☑ | `pytest tests/ -q` → **12 passed in `negsc-ref` (py3.10), `negsc-dev` (py3.12), and `negsc` (WSL, py3.10) |
 | End-to-end pipeline on the real cache | ☑ | `outputs/run_real_step.json` |
 | Dense and sparse adjacency numerically identical | ☑ | `tests/test_sparse_adj.py` (5 tests) |
 | Same seed → same losses, in and across processes | ☑ | `tests/test_determinism.py` |
-| DGL CUDA probe falls back cleanly | ☑ | `device.py`; the py3.10 env has CUDA torch + CPU DGL and the suite passes |
+| DGL CUDA probe falls back cleanly | ☑ | `device.py`; the Windows `negsc-ref` has CUDA torch + CPU DGL and the suite passes |
+| GPU graph allocation | ☑ | WSL `negsc`: `dgl.graph(...).to('cuda')` → `cuda:0` |
 | Peak RAM during a 200k-row run | ~2.5 GB | measured, block-parallel |
 | One contrastive step, real chunk, ~50 subgraphs | ~1–3 s | `run_real_step.json` |
 
