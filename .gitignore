@@ -66,3 +66,7 @@ runs/
 !RESULTS.md
 !LIMITATIONS.md
 !reference/REPAIR_DIFF.md
+
+# --- Personal notes: deliberately NOT tracked -----------------------------
+# The author's own reading notes. Kept out of the repo on purpose.
+READING_GUIDE.md
