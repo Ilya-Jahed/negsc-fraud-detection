@@ -52,8 +52,9 @@ DEVICE = get_device()
 # Reference defaults (NEGSC.ipynb cells 9, 12, 19, 29). Kept at the top so a
 # run manifest can record what was actually used.
 DEFAULTS = dict(
+    # The cache from make_cache.py is ALREADY sampled 3% per class; there is
+    # deliberately no sampling default here (see --sample-frac).
     data="data_raw/sample_3pct.csv",
-    sample_frac=0.03,
     test_size=0.3,
     split_random_state=123,
     g_len=35000,
@@ -84,8 +85,8 @@ def parse_args(argv=None):
                     help="read only the first N rows of --data (smoke runs)")
     ap.add_argument("--sample-frac", type=float, default=None,
                     help="per-Attack-class downsampling fraction. Defaults to "
-                         "0.03, or 1.0 when --rows is given (the cache is "
-                         "already sampled)")
+                         "1.0: the cache from make_cache.py is already sampled "
+                         "3%% per class. Set this only when --data is a raw csv.")
     ap.add_argument("--test-size", type=float, default=DEFAULTS["test_size"])
     ap.add_argument("--g-len", type=int, default=DEFAULTS["g_len"],
                     help="rows per training graph chunk")
@@ -165,9 +166,12 @@ def main(argv=None):
     set_seed(args.seed)
     warn_if_unpinned()
 
-    sample_frac = args.sample_frac
-    if sample_frac is None:
-        sample_frac = 1.0 if args.rows is not None else DEFAULTS["sample_frac"]
+    # Never re-sample by default. `--data` is normally the cache built by
+    # make_cache.py, which already holds the 3% per-class sample; applying 3%
+    # again would leave 0.09% of the dataset (33,934 rows instead of
+    # 1,131,139). Sampling is opt-in via --sample-frac, and only meaningful
+    # when --data points at a raw, unsampled CSV.
+    sample_frac = 1.0 if args.sample_frac is None else args.sample_frac
 
     run_id = args.run_id or time.strftime("run_%Y%m%d_%H%M%S")
     os.makedirs(args.out_dir, exist_ok=True)
@@ -182,6 +186,11 @@ def main(argv=None):
     print(f"[data] loaded {len(raw):,} rows")
 
     if sample_frac < 1.0:
+        if "sample" in os.path.basename(args.data).lower():
+            print(f"[data] WARNING: --sample-frac {sample_frac} applied to "
+                  f"{args.data}, which looks like an already-sampled cache. "
+                  f"Row count {len(raw):,} -> ~{int(len(raw) * sample_frac):,}. "
+                  f"Omit --sample-frac to use the cache as-is.")
         raw = data.sample_by_attack(raw, frac=sample_frac,
                                     random_state=DEFAULTS["split_random_state"])
         print(f"[data] sampled to {len(raw):,} rows (frac={sample_frac})")
