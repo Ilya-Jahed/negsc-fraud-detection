@@ -34,14 +34,51 @@ def embed_graphs(model, full_train_graph, G_test):
     NEGSC model's encoder. Mirrors NEGSC.ipynb cell 44 (embedding lines).
 
     Returns (train_embs, test_embs, train_lbls, test_lbls).
-    """
-    embeds = model.embed(full_train_graph, full_train_graph.ndata['h'],
-                          full_train_graph.edata['h']).detach()
-    train_embs = embeds
-    test_embs = model.embed(G_test, G_test.ndata['feature'], G_test.edata['h'])
 
-    train_lbls = full_train_graph.edata['label']
-    test_lbls = G_test.edata['label']
+    MEMORY NOTE -- divergence from the notebook, and why
+    ----------------------------------------------------
+    The notebook runs this under autograd. On the paper's 24 GB card that is
+    fine; here the test graph alone is ~340k flows (~680k directed edges), and
+    the multi-head layer keeps all three heads' intermediates alive at once.
+    Measured on that graph, the retained activations are roughly:
+
+        feat_cat [E,117]   ~300 MB
+        W out    [E,78]    ~200 MB
+        messages [E,39]    ~100 MB
+        attention[E,39]    ~100 MB
+                                   ~0.7 GB per head, x3 heads
+
+    plus ~660 MB of graph tensors for both graphs. The first full run died
+    exactly here, on a 9.5 GB MIG slice, with an allocator error.
+
+    None of it is needed: the embeddings are consumed by a downstream
+    classifier that trains its own weights, so no gradient has to flow back
+    through the encoder. Running under no_grad removes the activations
+    entirely. `model.eval()` changes nothing numerically -- this encoder has no
+    dropout or batch-norm -- it is set to make the intent explicit.
+
+    The training graph's feature tensors are also released before the test
+    forward: the classifier still needs that graph for its edges and labels,
+    but not for `ndata['h']` or `edata['h']`.
+    """
+    model.eval()
+    with torch.no_grad():
+        train_embs = model.embed(full_train_graph, full_train_graph.ndata['h'],
+                                 full_train_graph.edata['h']).detach()
+        train_lbls = full_train_graph.edata['label']
+
+        # Free ~460 MB before the test-graph forward pass. Safe: the
+        # downstream classifier overwrites ndata['h'] with its own input and
+        # only reads edata['label'], which is kept.
+        full_train_graph.ndata.pop('h', None)
+        full_train_graph.edata.pop('h', None)
+        if DEVICE.type == "cuda":
+            torch.cuda.empty_cache()
+
+        test_embs = model.embed(G_test, G_test.ndata['feature'],
+                                G_test.edata['h']).detach()
+        test_lbls = G_test.edata['label']
+
     return train_embs, test_embs, train_lbls, test_lbls
 
 
