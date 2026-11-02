@@ -147,6 +147,19 @@ def build_adjacency(g, use_dense: bool):
     return SparseAdjacency.from_dgl(g)
 
 
+def write_loss_log(path: str, rows: list) -> None:
+    """Write the per-epoch loss CSV. Called as soon as training finishes, so a
+    later failure in the predict stage cannot lose the training record."""
+    import csv
+
+    if not rows:
+        return
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+
+
 def adjacency_lists(g) -> dict:
     adj_lists = defaultdict(set)
     u, v = g.edges()
@@ -265,9 +278,23 @@ def main(argv=None):
             for _ in range(5):
                 torch.cuda.empty_cache()
 
+        # Checkpoint after every chunk. Training is the expensive part; the
+        # predict stage below is memory-hungry and can fail on a small GPU.
+        # Without this, a failure there loses every chunk trained so far --
+        # which is what happened on the first full run.
+        torch.save(model.state_dict(),
+                   os.path.join(args.out_dir, f"model_{run_id}.pt"))
+
+    # Training is finished; record its log now rather than after predict.
+    write_loss_log(os.path.join(args.out_dir, f"loss_{run_id}.csv"), loss_log)
+
     # -- predict ---------------------------------------------------------
     metrics = {}
     if not args.skip_predict:
+        if DEVICE.type == "cuda":
+            free, total = torch.cuda.mem_get_info()
+            print(f"[predict] GPU memory: {free / 1e9:.2f} GB free of "
+                  f"{total / 1e9:.2f} GB")
         print("[predict] preparing test graph and full training graph ...")
         X_test = data.transform_with_encoder(X_test, target_encoder)
         X_test = data.scale_and_build_feature_vector(X_test, scaler, cols_to_norm)
@@ -290,7 +317,8 @@ def main(argv=None):
         metrics = predict.evaluate(test_lbls_decoded, preds_decoded,
                                    save_path=cm_path)
 
-        torch.save(model.state_dict(), os.path.join(args.out_dir, f"model_{run_id}.pt"))
+        # model_<id>.pt was already written after training; only the
+        # downstream classifier is new here.
         torch.save(log.state_dict(), os.path.join(args.out_dir, f"log_{run_id}.pt"))
 
     # -- manifest --------------------------------------------------------
@@ -320,14 +348,6 @@ def main(argv=None):
     manifest_path = os.path.join(args.out_dir, f"run_{run_id}.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
-
-    if loss_log:
-        import csv
-        log_path = os.path.join(args.out_dir, f"loss_{run_id}.csv")
-        with open(log_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=list(loss_log[0]))
-            w.writeheader()
-            w.writerows(loss_log)
 
     print(f"[run] done in {elapsed}s -> {manifest_path}")
 
