@@ -3,6 +3,21 @@
 > **Purpose.** Everything that must be done *here* before anything is taken into the
 > app. It is a work order, not a description of the code (for that see `README.md`).
 >
+> **Version 7 — 2026-11-02.** Variant A reproduced the paper: 94.87% weighted
+> recall / 94.87% weighted F1 against the reported 95.16% / 95.15%, four of five
+> classes within one point, on the first untuned full run (`RESULTS.md`). **This
+> changes what the remaining phases are for.** They are no longer repairs needed
+> to reach a number — the number arrived without them. They now answer a
+> different question: *which parts of the released code produce that result, and
+> which are accidental?* See §4.1.
+>
+> **Version 6 — 2026-11-02.** A full run of variant A completed on the lab
+> server and landed within 0.29 points of the paper's weighted recall (94.87% vs
+> 95.16%). See `RESULTS.md`. Two consequences: the earlier claim that the
+> reported numbers were unreachable was **wrong** and is corrected there; and
+> the next milestone is variance (3 seeds) before the parity gate, since a
+> single run has no error bar.
+>
 > **Version 5 — 2026-10-28.** v4 reordered the project around paper fidelity.
 > v5 records what Phase 0/1 actually produced, and **two measurements that change the
 > plan**: the sampler yields ~50 subgraphs per epoch rather than 20,000 (V13), which
@@ -41,20 +56,31 @@ as-is.
 
 ## Executive summary — the seven things that matter
 
-1. **The port is faithful.** Appendix A audits every symbol against its source cell.
-   Verdict: numerically equivalent for the untouched version, with three caveats, none
-   requiring a logic change.
-2. **It does not run today.** Three blockers: `random.sample(set)` raises on Python
+1. **The port is faithful, and it reproduces the paper.** A full run of variant A
+   scored **94.87% weighted recall** against the reported 95.16%, with four of five
+   classes within one point (`RESULTS.md` §2). Appendix A audits every symbol against
+   its source cell; the gap is concentrated in **Theft** (8.33% vs 31.82%, 4 of 48
+   test edges), which needs seeds to interpret.
+2. **It did not run at first.** Three blockers: `random.sample(set)` raises on Python
    ≥3.11, `category_encoders` was missing, and the 6 GB CSV does not fit in 16.9 GB
-   of RAM next to pandas.
-3. **Memory decides the schedule.** The reference builds a **dense 33k×33k adjacency
-   per 35k-flow chunk = 4.3 GB**. On a 6 GB card this OOMs. Fix it before any GPU run.
-4. **The released code computes a different function from the one the paper
-   describes** — in twelve documented places, two of which are material (§7).
-5. **The paper's numbers are not reachable from the released artifacts.** The
-   authors' own checkpoints score 44–90% against a claimed ~95%.
-6. **Order of work (v4):** engineering → parity gate → deviation audit → repairs →
-   verification → firewall → benchmark → integration.
+   of RAM next to pandas. All three are closed.
+3. **Memory decided the schedule.** The reference builds a **dense 33k×33k adjacency
+   per 35k-flow chunk = 4.3 GB**; the sparse replacement is proven equivalent. The
+   predict stage then failed separately on a 10 GB MIG slice under autograd — fixed
+   by `no_grad`, leaving >9 GB headroom.
+4. **The released code computes a slightly different function from the one the paper
+   describes** — thirteen documented places (V1–V13), two material. **But it is that
+   code which produced the published numbers**, so the deviations cannot be what
+   blocked reproduction. They are now a question about *what the paper actually
+   measured*, not obstacles to clear.
+5. **The earlier "unreachable" claim is retracted.** It rested on the authors'
+   checkpoints scoring 0.44–0.90. That proves checkpoints are not portable across
+   feature orderings, not that the method fails to reproduce. Corrected in
+   `RESULTS.md` §2.
+6. **The contrastive loss does not converge** — slope −1.2e-5/epoch over 300 epochs,
+   against epoch noise of 1.4e-2 — yet the downstream probe reaches 94.87%. Explaining
+   this is the most valuable open question in the project, because it bears directly on
+   the word "self-supervised".
 7. **The app is an offline research harness** (D8), so integration is a drop-in
    objective module, not a service (§13).
 
@@ -66,10 +92,11 @@ as-is.
 
 | ID | Decision | Your call | Consequence |
 |---|---|---|---|
-| **D1** | Which version ships? | **Both.** The untouched port is kept as `variant-A` and proves fidelity. The repaired, paper-faithful version (`variant-B`) is the one that goes into the app, **and it is the object of this project's main work** | v4 puts B first; A becomes the Phase 2 gate |
+| **D1** | Which version ships? | **Both.** `variant-A` (untouched) proves fidelity **and already reproduces the paper**. `variant-B` (paper-faithful repairs) is still the intended app baseline — but it must now *earn* that place by matching or beating A, not by assumption | v7: A succeeded (§4.1); B is an ablation framework, and may score lower |
 | **D4** | Compute | Lab GPU available | CUDA build installed in `negsc-ref` (torch 2.3.0+cu121, GPU visible). ⚠ **DGL publishes no Windows CUDA wheels**, so on native Windows this still runs on CPU. GPU runs need WSL2/Linux — see `ENV.md`. CPU cost is hours, not days, because of V13 |
 | **D8** | App profile | Offline research harness: CSV in, artifacts out. No enforcement, no streaming, no latency budget, CPU at runtime, no export path | Integration contract in §13, not a serving contract |
 | **D9** | Phase order | Paper fidelity first, app last | Applied in §4–§13 |
+| **D10** | What the deviations mean now | Since A reproduces the paper, the deviations are part of how the published numbers were produced. **No repair may be justified by "it moves us toward 95.16%."** Each must be justified on correctness grounds, and its cost reported | Phase 3 documents mechanism; Phase 4 measures cost, not gain |
 
 ### 1.2 Still open
 
@@ -114,6 +141,7 @@ as-is.
 | Full training, CPU, estimate | **hours**, not days |
 | Full training, 4090 (paper) | 3,685 s |
 | Published checkpoint accuracy | **0.44 – 0.90**, by feature order |
+| **Full variant-A run, A100 MIG 1g.10gb** | **5,652 s (94 min)**, 23 chunks × 300 epochs, 678,684 test edges → **94.87% weighted recall** (`RESULTS.md`) |
 
 ⚠ An earlier estimate of 25–43 s/step and ~3.5 days was measured on a synthetic
 graph where nearly every node had high degree, so `sub_sam` returned ~20,000
@@ -172,6 +200,62 @@ confound: when B underperforms the paper, you cannot distinguish *"the paper's m
 is weaker than advertised"* from *"my port has a bug I never found"* from *"my repair
 is wrong"*. One hour buys the elimination of one of those three explanations. If you
 disagree, drop the checkbox — nothing else depends on it.
+
+### 4.1 What changes now that variant A reproduces the paper
+
+This section is the most important edit in v7. Read it before planning any further
+work.
+
+**The result.** One untuned full run of variant A — the untouched port — reached
+94.87% weighted recall against the reported 95.16%. Details in `RESULTS.md`.
+
+**Why that is a surprise.** Phases 3–5 were designed on the premise that the released
+code was broken relative to the paper, and that repairing the thirteen deviations
+would be what closed the gap. The gap closed without any repair. So the premise was
+wrong, and the phases mean something different now:
+
+| Phase | Old purpose | Purpose now |
+|---|---|---|
+| 3 — deviation audit | find what stops us reaching the paper | **document what the paper's numbers actually came from** |
+| 4 — repairs (variant B) | build the version that reaches the paper | **separate the deviations that matter from the ones that do not** |
+| 5 — verification | prove the repairs worked | **measure what each repair costs or buys** |
+
+**The inference to take seriously.** If the published numbers came from the released
+code, deviations included, then those deviations are not bugs *relative to the
+experienced result* — they are part of the mechanism that produced it. Some are
+clearly unintended (a random projection inside a loss term cannot be a design
+choice). Others may be doing real work:
+
+- **V2** (untrained edge embedder) contributes a stochastic term to `L_edges`. It
+  cannot be why the model works, but removing it changes the training signal.
+- **V4** (averaging heads instead of concatenating) reduces the parameter count by a
+  factor of three in the output projection.
+- **V11** (τ hard-coded as 0.01/0.1 in the loss instead of 5) sharpens the
+  contrastive objective by two orders of magnitude. This may be load-bearing.
+- **V3** (a second GAT over the same graph instead of Eq. 5 interpolation) means the
+  positive pair shares its input graph. That should make the task *easier*, not
+  harder — consistent with a loss that never moves (§6 of `RESULTS.md`).
+
+**Therefore variant B may score worse than variant A.** That is not a failure; it is
+the expected outcome if the paper's description is aspirational and its numbers came
+from the code. The project must be willing to report it.
+
+**Consequences for the plan:**
+
+1. **The metric is no longer "closeness to 95.16%".** A repair that drops F1 by two
+   points but removes a random projection is still a correct repair, and must be
+   reported as a cost, not suppressed as a regression.
+2. **The firewall ablation moves up in priority.** The 94.87% is measured with a
+   label-fitted target encoder, so it is a leaky number by this project's own
+   definition. It is now the largest single threat to the validity of the headline
+   result — larger than any deviation.
+3. **The flat loss becomes the lead scientific question**, not a footnote. If the
+   encoder barely trains and the probe does the work, "self-supervised" needs
+   qualifying in every claim made downstream.
+4. **The parity gate is unchanged in purpose but sharper in value.** It now
+   distinguishes "we computed the same thing" from "we happened to land nearby".
+5. **Do not tune toward the paper from here.** The run was untuned; keeping it that
+   way is what makes the comparison honest.
 
 ---
 
@@ -321,6 +405,12 @@ trajectory exactly."*
 
 ## 8. Phase 3 — The deviation audit (3–5 days)
 
+> **Reframed in v7.** This is no longer a search for what blocks reproduction — the
+> reproduction already happened (§4.1). It is now the documentation of **what the
+> paper's numbers actually came from**: which of the thirteen deviations the result
+> depends on, and which are accidental. The output is the same document; the reason
+> for writing it is different, and so is the standard of evidence.
+
 **This is the deliverable you asked for: what the paper says vs what the code does.**
 Output: `DEVIATIONS.md`, one entry per item, in this format:
 
@@ -372,6 +462,15 @@ Recorded so the audit reads as a complete job rather than a list of complaints:
 ---
 
 ## 9. Phase 4 — Repairs: building Variant B (1.5–2 weeks)
+
+> **Reframed in v7.** Variant B is no longer "the version that reaches the paper" —
+> variant A already does. B is now an **ablation framework**: apply one deviation fix
+> at a time and measure what it costs. A repair that lowers F1 is a legitimate result
+> and must be reported, not reverted. The question is "which parts of the released
+> code carry the result?", not "how do we get closer to 95%?".
+>
+> ⚠ If B underperforms A, that is the expected outcome when the paper's description is
+> aspirational and its numbers came from the code. Write it down either way.
 
 ### 9.1 Rules
 
@@ -526,6 +625,9 @@ destination IP is randomised; the headline protocol is a supervised probe, so
 |---|---|---|---|
 | M0 | Both envs green on GPU | D2 | ½ day |
 | M1 | Engineering fixes + smoke + determinism | Phase 1 | ☑ done 2026-10-28 |
+| M1.5 | Full variant-A run at scale (1 seed) | M1 | ☑ done 2026-11-02, `RESULTS.md` |
+| M1.6 | Variance: 3 more seeds | M1.5 | **in progress — do this first** |
+| M1.7 | Firewall ablation L0 vs L1 | M1.6 | promoted: the 94.87% is leaky |
 | M2 | Parity gate exact | M1 | ½ day |
 | M3 | `DEVIATIONS.md` complete | M2 | 3–5 days |
 | M4 | Variant B training end to end | M3 | 1.5–2 weeks |
